@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties, FormEvent, ReactElement } from 'react'
-import { buildJournalSnapshot, requestOpenAiCompatibleCoaching } from './ai'
+import { buildJournalSnapshot, isTransientProviderError, requestOpenAiCompatibleCoaching } from './ai'
 import type { AiCoachingResult } from './ai'
 
 export type Direction = 'Long' | 'Short'
@@ -147,6 +147,7 @@ function App() {
   const [aiResult, setAiResult] = useState<AiCoachingResult | null>(null)
   const [tradeReview, setTradeReview] = useState<Trade | null>(null)
   const [tradeReviewStatus, setTradeReviewStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+  const [retryScope, setRetryScope] = useState<'journal' | 'trade' | null>(null)
   const [previewIndex, setPreviewIndex] = useState(0)
 
   useEffect(() => {
@@ -303,6 +304,7 @@ function App() {
     }
     setAiStatus('loading')
     setAiError('')
+    setRetryScope(null)
     try {
       const snapshot = buildJournalSnapshot(trades, includeNotes)
       const prompt = [
@@ -325,7 +327,10 @@ function App() {
       setAiStatus('success')
     } catch (error) {
       setAiStatus('error')
-      setAiError(error instanceof Error ? error.message : 'AI analizi başarısız oldu.')
+      setRetryScope(isTransientProviderError(error) ? 'journal' : null)
+      setAiError(isTransientProviderError(error)
+        ? 'Gemini şu anda yoğun talep nedeniyle geçici olarak yanıt veremiyor. Otomatik denemeler tamamlandı; kısa süre sonra tekrar deneyebilirsiniz.'
+        : error instanceof Error ? error.message : 'AI analizi başarısız oldu.')
     }
   }
 
@@ -337,6 +342,7 @@ function App() {
     }
     setTradeReviewStatus('loading')
     setAiError('')
+    setRetryScope(null)
     try {
       const prompt = [
         'Tek bir trading işlemini odaklı olarak incele.',
@@ -354,7 +360,10 @@ function App() {
       setTradeReviewStatus('success')
     } catch (error) {
       setTradeReviewStatus('error')
-      setAiError(error instanceof Error ? error.message : 'İşlem değerlendirmesi başarısız oldu.')
+      setRetryScope(isTransientProviderError(error) ? 'trade' : null)
+      setAiError(isTransientProviderError(error)
+        ? 'Gemini şu anda yoğun talep nedeniyle geçici olarak yanıt veremiyor. Otomatik denemeler tamamlandı; kısa süre sonra tekrar deneyebilirsiniz.'
+        : error instanceof Error ? error.message : 'İşlem değerlendirmesi başarısız oldu.')
     }
   }
 
@@ -565,7 +574,12 @@ function App() {
               </button>
             </section>
             {aiStatus === 'loading' && <div className="ai-loading" role="status"><span className="spinner" /><div><strong>Günlük taranıyor</strong><small>Desenler, seriler ve tekrar eden hatalar inceleniyor...</small></div></div>}
-            {aiStatus === 'error' && <div className="error-banner" role="alert">{aiError}</div>}
+            {aiStatus === 'error' && (
+              <div className="provider-error" role="alert">
+                <div><strong>AI sağlayıcısı geçici olarak yanıt vermiyor</strong><p>{aiError}</p></div>
+                {retryScope === 'journal' && <button type="button" onClick={() => void runJournalAnalysis()}>Tekrar dene</button>}
+              </div>
+            )}
             {aiStatus === 'idle' && !aiResult && <div className="ai-empty panel"><strong>Henüz AI değerlendirmesi yok</strong><span>Analizi başlatmadan hiçbir işlem verisi gönderilmez.</span></div>}
             {aiResult && aiStatus === 'success' && (
               <div className="ai-result-grid">
@@ -670,10 +684,11 @@ function App() {
               <label>API Base URL<input type="url" value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder={aiProvider === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta/openai' : 'https://api.openai.com/v1'} /></label>
               <label>{aiProvider === 'gemini' ? 'Gemini API Key' : 'API Key'}<input type="password" value={aiApiKey} onChange={(event) => setAiApiKey(event.target.value)} placeholder={aiProvider === 'gemini' ? 'AI Studio API anahtarı' : 'sk-...'} autoComplete="off" /></label>
               <label>Vision model<input type="text" value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder={aiProvider === 'gemini' ? 'gemini-3.8-flash' : 'gpt-4o-mini'} /></label>
+              {aiProvider === 'gemini' && <div className="model-fallback"><span>Yedek model sırası</span><strong>1. gemini-3.8-flash</strong><strong>2. gemini-3.5-flash-lite</strong></div>}
               <div className="ai-key-warning">
                 <strong>{aiProvider === 'gemini' ? 'Gemini AI Studio: ücretsiz/uygun seviye anahtarınızı kullanın.' : 'Tarayıcıdan doğrudan API kullanımı üretim için önerilmez.'}</strong>
                 <p>{aiProvider === 'gemini'
-                  ? 'Base URL: https://generativelanguage.googleapis.com/v1beta/openai · Model: gemini-3.8-flash. Anahtar AI Studio’dan alınır ve React oturum belleğinde tutulur.'
+                  ? 'Base URL: https://generativelanguage.googleapis.com/v1beta/openai · Model sırası: gemini-3.8-flash → gemini-3.5-flash-lite. Anahtar AI Studio’dan alınır ve React oturum belleğinde tutulur.'
                   : 'Anahtar React oturumu içinde tutulur; localStorage’a veya kaynak dosyasına kaydedilmez.'} Sayfayı yenilemek anahtarı siler. Üretimde backend proxy kullanın.</p>
               </div>
             </div>
@@ -698,7 +713,12 @@ function App() {
               <p className="trade-review-consent">Bu işlem için sembol, tarih, yön, timeframe, fiyatlar, R/R, sonuç, P&L, strateji, etiketler ve seçili ise not/grafik gönderilir. Veriler yalnızca aşağıdaki butona basınca gönderilir.</p>
               {tradeReviewStatus === 'idle' && <button className="primary-button" type="button" onClick={() => void runTradeReview(tradeReview)}>Bu İşlemi AI ile Değerlendir</button>}
               {tradeReviewStatus === 'loading' && <div className="ai-loading" role="status"><span className="spinner" /><div><strong>İşlem inceleniyor</strong></div></div>}
-              {tradeReviewStatus === 'error' && <div className="error-banner" role="alert">{aiError}</div>}
+              {tradeReviewStatus === 'error' && (
+                <div className="provider-error" role="alert">
+                  <div><strong>İşlem değerlendirmesi geçici olarak beklemede</strong><p>{aiError}</p></div>
+                  {retryScope === 'trade' && <button type="button" onClick={() => void runTradeReview(tradeReview)}>Tekrar dene</button>}
+                </div>
+              )}
               {tradeReviewStatus === 'success' && aiResult && (
                 <div className="ai-result-grid trade-review-result">
                   <article className="panel ai-result-card ai-summary"><span>Özet</span><p>{aiResult.summary}</p></article>

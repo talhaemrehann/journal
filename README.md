@@ -33,6 +33,7 @@ Uygulama içindeki **AI Koç** sekmesinden OpenAI uyumlu sağlayıcı ayarların
 - **Gemini (önerilen)** varsayılan sağlayıcıdır.
 - Gemini API Base URL: `https://generativelanguage.googleapis.com/v1beta/openai`
 - Gemini vision model varsayılan olarak `gemini-3.8-flash` değerini kullanır.
+- 503/429 veya RESOURCE_EXHAUSTED durumunda en fazla 3 kısa exponential backoff denemesi yapılır; sonra yedek Gemini sırası denenir: `gemini-3.8-flash` → `gemini-3.5-flash-lite`.
 - Gemini anahtarı Google AI Studio’dan alınır; OpenAI uyumlu endpoint ile Bearer authentication kullanılır.
 - OpenAI uyumlu sağlayıcı seçeneğiyle özel endpoint ve model kullanılabilir.
 - API anahtarı yalnızca React oturum belleğinde tutulur; `localStorage` veya kaynak koduna kaydedilmez ve sayfa yenilenince temizlenir.

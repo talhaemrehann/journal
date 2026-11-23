@@ -15,6 +15,25 @@ export type AiProviderSettings = {
   model: string
 }
 
+export const GEMINI_MODEL_FALLBACKS = ['gemini-3.8-flash', 'gemini-3.5-flash-lite'] as const
+
+export class ProviderRequestError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+export const isTransientProviderError = (error: unknown) => {
+  if (error instanceof ProviderRequestError) return error.status === 429 || error.status === 503
+  const message = error instanceof Error ? error.message : ''
+  return /429|503|RESOURCE_EXHAUSTED|high demand|yüksek talep/i.test(message)
+}
+
+const sleep = (milliseconds: number) => new Promise((resolve) => window.setTimeout(resolve, milliseconds))
+
 const cleanJson = (text: string) => {
   const start = text.indexOf('{')
   const end = text.lastIndexOf('}')
@@ -28,58 +47,63 @@ export async function requestOpenAiCompatibleCoaching(
   screenshots: string[],
 ): Promise<AiCoachingResult> {
   if (!settings.apiKey.trim()) throw new Error('API anahtarı girilmedi.')
-
   const base = settings.baseUrl.trim().replace(/\/$/, '')
   const endpoint = base.endsWith('/chat/completions') ? base : `${base}/chat/completions`
-  const content: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [
-    { type: 'text', text: prompt },
-  ]
+  const content: Array<{ type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }> = [{ type: 'text', text: prompt }]
+  for (const screenshot of screenshots) if (screenshot.startsWith('data:image/')) content.push({ type: 'image_url', image_url: { url: screenshot } })
 
-  for (const screenshot of screenshots) {
-    if (screenshot.startsWith('data:image/')) content.push({ type: 'image_url', image_url: { url: screenshot } })
-  }
+  const configuredModel = settings.model.trim() || (settings.provider === 'gemini' ? GEMINI_MODEL_FALLBACKS[0] : 'gpt-4o-mini')
+  const modelSequence = settings.provider === 'gemini'
+    ? [...new Set([configuredModel, ...GEMINI_MODEL_FALLBACKS])]
+    : [configuredModel]
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${settings.apiKey.trim()}`,
-    },
-    body: JSON.stringify({
-      model: settings.model.trim() || (settings.provider === 'gemini' ? 'gemini-3.8-flash' : 'gpt-4o-mini'),
-      temperature: 0.35,
-      response_format: { type: 'json_object' },
-      messages: [
-        {
-          role: 'system',
-          content: 'Sen bir trading koçusun. Veri odaklı, ölçülü ve uygulamaya dönük Türkçe geri bildirim ver. Finansal tavsiye değil; risk yönetimi ve süreç iyileştirmesi odaklı ol. Tam olarak JSON nesnesi döndür: summary, strengths, weaknesses, priorityRecommendations, followUpPrompts. Diziler metin dizisidir.',
-        },
-        { role: 'user', content },
-      ],
-    }),
-  })
-
-  if (!response.ok) {
-    const detail = await response.text()
-    throw new Error(`Sağlayıcı hatası (${response.status}): ${detail.slice(0, 220)}`)
-  }
-
-  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
-  const text = payload.choices?.[0]?.message?.content
-  if (!text) throw new Error('Sağlayıcı yapılandırılmış bir yanıt vermedi.')
-
-  try {
-    const parsed = JSON.parse(cleanJson(text)) as Partial<AiCoachingResult>
-    return {
-      summary: parsed.summary || 'Özet oluşturulamadı.',
-      strengths: Array.isArray(parsed.strengths) ? parsed.strengths : [],
-      weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses : [],
-      priorityRecommendations: Array.isArray(parsed.priorityRecommendations) ? parsed.priorityRecommendations : [],
-      followUpPrompts: Array.isArray(parsed.followUpPrompts) ? parsed.followUpPrompts : [],
+  let lastError: ProviderRequestError | null = null
+  for (const model of modelSequence) {
+    for (let retry = 0; retry <= 3; retry += 1) {
+      try {
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.apiKey.trim()}` },
+          body: JSON.stringify({
+            model,
+            temperature: 0.35,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: 'Sen bir trading koçusun. Veri odaklı, ölçülü ve uygulamaya dönük Türkçe geri bildirim ver. Finansal tavsiye değil; risk yönetimi ve süreç iyileştirmesi odaklı ol. Tam olarak JSON nesnesi döndür: summary, strengths, weaknesses, priorityRecommendations, followUpPrompts. Diziler metin dizisidir.' },
+              { role: 'user', content },
+            ],
+          }),
+        })
+        if (!response.ok) {
+          const detail = await response.text()
+          throw new ProviderRequestError(response.status, `Sağlayıcı hatası (${response.status}): ${detail.slice(0, 220)}`)
+        }
+        const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> }
+        const text = payload.choices?.[0]?.message?.content
+        if (!text) throw new Error('Sağlayıcı yapılandırılmış bir yanıt vermedi.')
+        try {
+          const parsed = JSON.parse(cleanJson(text)) as Partial<AiCoachingResult>
+          return {
+            summary: parsed.summary || 'Özet oluşturulamadı.',
+            strengths: Array.isArray(parsed.strengths) ? parsed.strengths : [],
+            weaknesses: Array.isArray(parsed.weaknesses) ? parsed.weaknesses : [],
+            priorityRecommendations: Array.isArray(parsed.priorityRecommendations) ? parsed.priorityRecommendations : [],
+            followUpPrompts: Array.isArray(parsed.followUpPrompts) ? parsed.followUpPrompts : [],
+          }
+        } catch {
+          throw new Error('Sağlayıcı yanıtı beklenen JSON formatında değildi.')
+        }
+      } catch (error) {
+        if (error instanceof ProviderRequestError && (error.status === 429 || error.status === 503)) {
+          lastError = error
+          if (retry < 3) await sleep(500 * (2 ** retry))
+          continue
+        }
+        throw error
+      }
     }
-  } catch {
-    throw new Error('Sağlayıcı yanıtı beklenen JSON formatında değildi.')
   }
+  throw lastError ?? new Error('AI sağlayıcısına ulaşılamadı.')
 }
 
 export function buildJournalSnapshot(trades: Trade[], includeNotes: boolean) {
