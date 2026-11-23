@@ -23,6 +23,7 @@ export type Trade = {
   tags: string[]
   notes: string
   chartScreenshot?: string
+  chartScreenshots?: string[]
 }
 
 const STORAGE_KEY = 'trade-journal-trades-v1'
@@ -52,7 +53,22 @@ const emptyForm: Omit<Trade, 'id'> = {
   tags: [],
   notes: '',
   chartScreenshot: '',
+  chartScreenshots: [],
 }
+
+const getTradeScreenshots = (trade: Pick<Trade, 'chartScreenshot' | 'chartScreenshots'>) => {
+  const screenshots = trade.chartScreenshots?.filter((item) => item.startsWith('data:image/')) ?? []
+  if (trade.chartScreenshot?.startsWith('data:image/') && !screenshots.includes(trade.chartScreenshot)) {
+    screenshots.unshift(trade.chartScreenshot)
+  }
+  return screenshots
+}
+
+const normalizeTradeScreenshots = (trade: Trade): Trade => ({
+  ...trade,
+  chartScreenshots: getTradeScreenshots(trade),
+  chartScreenshot: undefined,
+})
 
 const money = (value: number) =>
   new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value)
@@ -130,12 +146,14 @@ function App() {
   const [aiResult, setAiResult] = useState<AiCoachingResult | null>(null)
   const [tradeReview, setTradeReview] = useState<Trade | null>(null)
   const [tradeReviewStatus, setTradeReviewStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
+  const [previewIndex, setPreviewIndex] = useState(0)
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       try {
         const stored = localStorage.getItem(STORAGE_KEY)
-        setTrades(stored ? JSON.parse(stored) : seedTrades)
+        const parsed = stored ? JSON.parse(stored) as Trade[] : seedTrades
+        setTrades(parsed.map(normalizeTradeScreenshots))
         if (!stored) localStorage.setItem(STORAGE_KEY, JSON.stringify(seedTrades))
       } catch {
         setStorageError('Tarayıcı verisi okunamadı. Demo verilerle devam ediliyor.')
@@ -226,7 +244,7 @@ function App() {
 
   const openEdit = (trade: Trade) => {
     setEditingId(trade.id)
-    setForm({ ...trade, tags: [...trade.tags] })
+    setForm({ ...trade, tags: [...trade.tags], chartScreenshots: getTradeScreenshots(trade), chartScreenshot: undefined })
     setModalClosing(false)
     setModalOpen(true)
   }
@@ -239,13 +257,19 @@ function App() {
     }, 180)
   }
 
-  const handleScreenshot = async (file?: File) => {
-    if (!file) return
+  const handleScreenshots = async (files: FileList | null) => {
+    if (!files?.length) return
     setUploading(true)
     setStorageError('')
     try {
-      const compressed = await compressImage(file)
-      setForm((current) => ({ ...current, chartScreenshot: compressed }))
+      const available = Array.from(files).slice(0, 8)
+      if (files.length > 8) setStorageError('En fazla 8 ekran görüntüsü seçilebilir; ilk 8 görsel işlendi.')
+      const compressed = await Promise.all(available.map((file) => compressImage(file)))
+      setForm((current) => ({
+        ...current,
+        chartScreenshots: [...(current.chartScreenshots ?? []), ...compressed].slice(0, 8),
+        chartScreenshot: undefined,
+      }))
     } catch (error) {
       setStorageError(error instanceof Error ? error.message : 'Görsel yüklenemedi.')
     } finally {
@@ -256,10 +280,11 @@ function App() {
   const submitTrade = (event: FormEvent) => {
     event.preventDefault()
     if (!form.symbol.trim() || !form.strategy.trim()) return
+    const chartScreenshots = (form.chartScreenshots ?? []).filter((item) => item.startsWith('data:image/'))
     if (editingId) {
-      persist(trades.map((trade) => trade.id === editingId ? { ...form, id: editingId, symbol: form.symbol.toUpperCase(), tags: form.tags } : trade))
+      persist(trades.map((trade) => trade.id === editingId ? { ...form, chartScreenshots, chartScreenshot: undefined, id: editingId, symbol: form.symbol.toUpperCase(), tags: form.tags } : trade))
     } else {
-      persist([{ ...form, id: crypto.randomUUID(), symbol: form.symbol.toUpperCase(), tags: form.tags }, ...trades])
+      persist([{ ...form, chartScreenshots, chartScreenshot: undefined, id: crypto.randomUUID(), symbol: form.symbol.toUpperCase(), tags: form.tags }, ...trades])
     }
     closeModal()
   }
@@ -283,12 +308,12 @@ function App() {
         'Aşağıdaki işlem günlüğünü analiz et.',
         'Aggregate verileri, strateji ve zaman dilimi performanslarını, yönleri, tekrar eden etiketleri, serileri, ortalama kâr/kayıp ve risk/ödül ilişkisini değerlendir.',
         'Güçlü tarafları ve tekrar eden zayıflıkları kanıtla. Her öncelik önerisi için somut uygulama adımı ver.',
-        'chartScreenshot değerleri "[ekran görüntüsü dahil]" olan işlemlerden en fazla 4 ekran görüntüsü ayrıca kullanıcı tarafından onaylandıktan sonra görsel olarak gönderilecektir.',
+        'chartScreenshots işaretleri bulunan tüm işlem ekran görüntüleri ayrıca kullanıcı tarafından onaylandıktan sonra görsel olarak gönderilecektir.',
         'JSON nesnesi döndür.',
         JSON.stringify(snapshot),
       ].join('\n')
       const screenshots = includeScreenshots
-        ? trades.filter((trade) => trade.chartScreenshot).map((trade) => trade.chartScreenshot as string)
+        ? trades.flatMap((trade) => getTradeScreenshots(trade)).slice(0, 8)
         : []
       const result = await requestOpenAiCompatibleCoaching(
         { baseUrl: aiBaseUrl, apiKey: aiApiKey, model: aiModel },
@@ -322,7 +347,7 @@ function App() {
       const result = await requestOpenAiCompatibleCoaching(
         { baseUrl: aiBaseUrl, apiKey: aiApiKey, model: aiModel },
         prompt,
-        includeScreenshots && trade.chartScreenshot ? [trade.chartScreenshot] : [],
+        includeScreenshots ? getTradeScreenshots(trade).slice(0, 8) : [],
       )
       setAiResult(result)
       setTradeReviewStatus('success')
@@ -502,7 +527,7 @@ function App() {
               <div className="table-wrap">
                 <table><thead><tr><th>Tarih</th><th>Sembol</th><th>Zaman dilimi</th><th>Yön</th><th>Strateji</th><th>R / R</th><th>Sonuç</th><th>P&L</th><th>Grafik</th><th><span className="sr-only">İşlemler</span></th></tr></thead>
                   <tbody>{filtered.map((trade) => (
-                    <tr key={trade.id}><td>{new Date(`${trade.date}T00:00:00`).toLocaleDateString('tr-TR', { day: '2-digit', month: 'short' })}</td><td><strong>{trade.symbol}</strong></td><td><span className="timeframe-badge">{trade.timeframe}</span></td><td><span className={`direction ${trade.direction.toLowerCase()}`}>{trade.direction === 'Long' ? '↑' : '↓'} {trade.direction}</span></td><td>{trade.strategy}</td><td>{trade.riskReward.toFixed(1)}R</td><td><span className={`result ${trade.result === 'Kazanç' ? 'win' : trade.result === 'Kayıp' ? 'loss' : 'be'}`}>{trade.result}</span></td><td className={trade.pnl >= 0 ? 'positive' : 'negative'}><strong>{trade.pnl >= 0 ? '+' : ''}{money(trade.pnl)}</strong></td><td>{trade.chartScreenshot ? <button className="chart-thumbnail" type="button" aria-label={`${trade.symbol} grafik önizlemesini aç`} onClick={() => setPreviewTrade(trade)}><img src={trade.chartScreenshot} alt={`${trade.symbol} işlem grafiği`} /></button> : <span className="no-chart">—</span>}</td><td><div className="row-actions"><button type="button" aria-label={`${trade.symbol} AI değerlendirmesi`} title="AI değerlendirmesi" onClick={() => { setTradeReview(trade); setTradeReviewStatus('idle'); setAiError('') }}>AI</button><button type="button" aria-label={`${trade.symbol} düzenle`} onClick={() => openEdit(trade)}><Icon name="edit" size={16} /></button><button type="button" aria-label={`${trade.symbol} sil`} onClick={() => deleteTrade(trade.id)}><Icon name="trash" size={16} /></button></div></td></tr>
+                    <tr key={trade.id}><td>{new Date(`${trade.date}T00:00:00`).toLocaleDateString('tr-TR', { day: '2-digit', month: 'short' })}</td><td><strong>{trade.symbol}</strong></td><td><span className="timeframe-badge">{trade.timeframe}</span></td><td><span className={`direction ${trade.direction.toLowerCase()}`}>{trade.direction === 'Long' ? '↑' : '↓'} {trade.direction}</span></td><td>{trade.strategy}</td><td>{trade.riskReward.toFixed(1)}R</td><td><span className={`result ${trade.result === 'Kazanç' ? 'win' : trade.result === 'Kayıp' ? 'loss' : 'be'}`}>{trade.result}</span></td><td className={trade.pnl >= 0 ? 'positive' : 'negative'}><strong>{trade.pnl >= 0 ? '+' : ''}{money(trade.pnl)}</strong></td><td>{getTradeScreenshots(trade).length ? <button className="chart-thumbnail" type="button" aria-label={`${trade.symbol} grafik galerisini aç`} onClick={() => { setPreviewIndex(0); setPreviewTrade(trade) }}><img src={getTradeScreenshots(trade)[0]} alt={`${trade.symbol} işlem grafiği`} /><span className="chart-count">{getTradeScreenshots(trade).length}</span></button> : <span className="no-chart">—</span>}</td><td><div className="row-actions"><button type="button" aria-label={`${trade.symbol} AI değerlendirmesi`} title="AI değerlendirmesi" onClick={() => { setTradeReview(trade); setTradeReviewStatus('idle'); setAiError('') }}>AI</button><button type="button" aria-label={`${trade.symbol} düzenle`} onClick={() => openEdit(trade)}><Icon name="edit" size={16} /></button><button type="button" aria-label={`${trade.symbol} sil`} onClick={() => deleteTrade(trade.id)}><Icon name="trash" size={16} /></button></div></td></tr>
                   ))}</tbody></table>
                 {!filtered.length && <div className="empty-state"><strong>İşlem bulunamadı</strong><span>Filtreleri değiştirin veya yeni bir işlem ekleyin.</span><button type="button" onClick={openCreate}>Yeni işlem ekle</button></div>}
               </div>
@@ -527,7 +552,7 @@ function App() {
               <div>
                 <span className="ai-consent-label">Gönderilecek veri özeti</span>
                 <p>{trades.length} işlem: sembol, tarih, yön, zaman dilimi, giriş/stop/target/çıkış, R/R, sonuç, P&L, strateji, etiketler{includeNotes ? ' ve notlar' : '; notlar gizli'}.</p>
-                <p>{includeScreenshots ? `${trades.filter((trade) => trade.chartScreenshot).length} ekran görüntüsü (en fazla 4) görsel olarak dahil edilebilir.` : 'Ekran görüntüleri gönderilmeyecek.'}</p>
+                <p>{includeScreenshots ? `${trades.reduce((count, trade) => count + getTradeScreenshots(trade).length, 0)} ekran görüntüsü (en fazla 8) görsel olarak dahil edilebilir.` : 'Ekran görüntüleri gönderilmeyecek.'}</p>
               </div>
               <div className="ai-consent-controls">
                 <label><input type="checkbox" checked={includeNotes} onChange={(event) => setIncludeNotes(event.target.checked)} /> Notları gönder</label>
@@ -574,10 +599,24 @@ function App() {
                 <label>Strateji<input required type="text" value={form.strategy} onChange={(e) => setForm({ ...form, strategy: e.target.value })} placeholder="Örn. London Breakout" /></label>
                 <label className="full-field">Etiketler<input type="text" value={form.tags.join(', ')} onChange={(e) => setForm({ ...form, tags: e.target.value.split(',').map((tag) => tag.trim()).filter(Boolean) })} placeholder="momentum, London" /></label>
                 <div className="full-field screenshot-field">
-                  <span>Grafik ekran görüntüsü</span>
-                  {form.chartScreenshot
-                    ? <div className="screenshot-preview"><img src={form.chartScreenshot} alt="Seçilen işlem grafiği" /><button type="button" onClick={() => setForm((current) => ({ ...current, chartScreenshot: '' }))}>Görseli kaldır</button></div>
-                    : <label className="upload-control"><input type="file" accept="image/*" onChange={(e) => void handleScreenshot(e.target.files?.[0])} /><span>{uploading ? 'Görsel sıkıştırılıyor...' : 'Dosya seç veya sürükle'}</span><small>En fazla 10 MB · otomatik sıkıştırılır</small></label>}
+                  <span>Grafik ekran görüntüleri</span>
+                  {(form.chartScreenshots?.length ?? 0) > 0 && (
+                    <div className="screenshot-gallery">
+                      {form.chartScreenshots?.map((screenshot, index) => (
+                        <div className="screenshot-thumb" key={`${index}-${screenshot.slice(-12)}`}>
+                          <img src={screenshot} alt={`Seçilen işlem grafiği ${index + 1}`} />
+                          <button type="button" aria-label={`Görsel ${index + 1} kaldır`} onClick={() => setForm((current) => ({ ...current, chartScreenshots: current.chartScreenshots?.filter((_, itemIndex) => itemIndex !== index), chartScreenshot: undefined }))}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {(form.chartScreenshots?.length ?? 0) < 8 && (
+                    <label className="upload-control">
+                      <input type="file" accept="image/*" multiple onChange={(event) => void handleScreenshots(event.target.files)} />
+                      <span>{uploading ? 'Görseller sıkıştırılıyor...' : 'Birden fazla dosya seç'}</span>
+                      <small>En fazla 8 görsel · her biri 10 MB · otomatik sıkıştırılır</small>
+                    </label>
+                  )}
                 </div>
                 <label className="full-field">Notlar<textarea rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Kurulum, duygular ve dersler..." /></label>
               </div>
@@ -587,14 +626,23 @@ function App() {
         </div>
       )}
 
-      {previewTrade?.chartScreenshot && (
+      {previewTrade && getTradeScreenshots(previewTrade).length > 0 && (
         <div className="modal-backdrop preview-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && setPreviewTrade(null)}>
           <div className="preview-modal" role="dialog" aria-modal="true" aria-labelledby="preview-title">
             <div className="preview-header">
               <div><p className="eyebrow">Grafik önizleme · {previewTrade.timeframe}</p><h2 id="preview-title">{previewTrade.symbol} {previewTrade.direction}</h2></div>
               <button className="icon-button" type="button" aria-label="Önizlemeyi kapat" onClick={() => setPreviewTrade(null)}><Icon name="close" /></button>
             </div>
-            <div className="preview-image"><img src={previewTrade.chartScreenshot} alt={`${previewTrade.symbol} büyük işlem grafiği`} /></div>
+            <div className="preview-image">
+              <img src={getTradeScreenshots(previewTrade)[previewIndex]} alt={`${previewTrade.symbol} büyük işlem grafiği ${previewIndex + 1}`} />
+              {getTradeScreenshots(previewTrade).length > 1 && (
+                <>
+                  <button className="preview-arrow previous" type="button" aria-label="Önceki ekran görüntüsü" onClick={() => setPreviewIndex((index) => (index - 1 + getTradeScreenshots(previewTrade).length) % getTradeScreenshots(previewTrade).length)}>‹</button>
+                  <button className="preview-arrow next" type="button" aria-label="Sonraki ekran görüntüsü" onClick={() => setPreviewIndex((index) => (index + 1) % getTradeScreenshots(previewTrade).length)}>›</button>
+                  <div className="preview-dots">{getTradeScreenshots(previewTrade).map((_, index) => <button key={index} type="button" aria-label={`${index + 1}. ekran görüntüsü`} className={previewIndex === index ? 'active' : ''} onClick={() => setPreviewIndex(index)} />)}</div>
+                </>
+              )}
+            </div>
             <div className="preview-meta">
               <div><span>Tarih</span><strong>{new Date(`${previewTrade.date}T00:00:00`).toLocaleDateString('tr-TR')}</strong></div>
               <div><span>Strateji</span><strong>{previewTrade.strategy}</strong></div>
@@ -625,7 +673,13 @@ function App() {
           <div className="modal trade-review-modal" role="dialog" aria-modal="true" aria-labelledby="trade-review-title">
             <div className="modal-header"><div><p className="eyebrow">Tek işlem incelemesi · {tradeReview.timeframe}</p><h2 id="trade-review-title">{tradeReview.symbol} — AI değerlendirmesi</h2></div><button className="icon-button" type="button" aria-label="İncelemeyi kapat" onClick={() => setTradeReview(null)}><Icon name="close" /></button></div>
             <div className="trade-review-body">
-              {tradeReview.chartScreenshot && includeScreenshots && <img className="trade-review-chart" src={tradeReview.chartScreenshot} alt={`${tradeReview.symbol} işlem grafiği`} />}
+              {includeScreenshots && getTradeScreenshots(tradeReview).length > 0 && (
+                <div className="trade-review-gallery">
+                  {getTradeScreenshots(tradeReview).map((screenshot, index) => (
+                    <img key={`${index}-${screenshot.slice(-12)}`} className="trade-review-chart" src={screenshot} alt={`${tradeReview.symbol} işlem grafiği ${index + 1}`} />
+                  ))}
+                </div>
+              )}
               <div className="trade-review-meta"><span>{tradeReview.date}</span><span>{tradeReview.direction}</span><span>{tradeReview.strategy}</span><span>{tradeReview.result}</span></div>
               <p className="trade-review-consent">Bu işlem için sembol, tarih, yön, timeframe, fiyatlar, R/R, sonuç, P&L, strateji, etiketler ve seçili ise not/grafik gönderilir. Veriler yalnızca aşağıdaki butona basınca gönderilir.</p>
               {tradeReviewStatus === 'idle' && <button className="primary-button" type="button" onClick={() => void runTradeReview(tradeReview)}>Bu İşlemi AI ile Değerlendir</button>}

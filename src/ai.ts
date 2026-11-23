@@ -34,7 +34,7 @@ export async function requestOpenAiCompatibleCoaching(
     { type: 'text', text: prompt },
   ]
 
-  for (const screenshot of screenshots.slice(0, 4)) {
+  for (const screenshot of screenshots) {
     if (screenshot.startsWith('data:image/')) content.push({ type: 'image_url', image_url: { url: screenshot } })
   }
 
@@ -154,7 +154,11 @@ export function buildJournalSnapshot(trades: Trade[], includeNotes: boolean) {
       strategy: trade.strategy,
       tags: trade.tags,
       notes: includeNotes ? trade.notes : '[notlar gizlendi]',
-      chartScreenshot: trade.chartScreenshot ? '[ekran görüntüsü dahil]' : '[ekran görüntüsü yok]',
+      chartScreenshots: trade.chartScreenshots?.length
+        ? trade.chartScreenshots.map((_, index) => `[ekran görüntüsü ${index + 1} dahil]`)
+        : trade.chartScreenshot
+          ? ['[ekran görüntüsü dahil]']
+          : ['[ekran görüntüsü yok]'],
     })),
   }
 }
