@@ -9,6 +9,7 @@ export type AiCoachingResult = {
 }
 
 export type AiProviderSettings = {
+  provider: 'gemini' | 'openai'
   baseUrl: string
   apiKey: string
   model: string
@@ -45,7 +46,7 @@ export async function requestOpenAiCompatibleCoaching(
       Authorization: `Bearer ${settings.apiKey.trim()}`,
     },
     body: JSON.stringify({
-      model: settings.model.trim() || 'gpt-4o-mini',
+      model: settings.model.trim() || (settings.provider === 'gemini' ? 'gemini-3.8-flash' : 'gpt-4o-mini'),
       temperature: 0.35,
       response_format: { type: 'json_object' },
       messages: [

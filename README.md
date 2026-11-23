@@ -30,8 +30,11 @@ npm run build
 
 Uygulama içindeki **AI Koç** sekmesinden OpenAI uyumlu sağlayıcı ayarlarını açın:
 
-- API Base URL varsayılan olarak `https://api.openai.com/v1` değerini kullanır.
-- Vision model varsayılan olarak `gpt-4o-mini` değeridir.
+- **Gemini (önerilen)** varsayılan sağlayıcıdır.
+- Gemini API Base URL: `https://generativelanguage.googleapis.com/v1beta/openai`
+- Gemini vision model varsayılan olarak `gemini-3.8-flash` değerini kullanır.
+- Gemini anahtarı Google AI Studio’dan alınır; OpenAI uyumlu endpoint ile Bearer authentication kullanılır.
+- OpenAI uyumlu sağlayıcı seçeneğiyle özel endpoint ve model kullanılabilir.
 - API anahtarı yalnızca React oturum belleğinde tutulur; `localStorage` veya kaynak koduna kaydedilmez ve sayfa yenilenince temizlenir.
 - Tarayıcıdan API anahtarı kullanmak üretim ortamı için önerilmez. Üretimde anahtar sunucu tarafında tutulan bir backend proxy üzerinden kullanılmalıdır.
 - Veri gönderimi varsayılan olarak otomatik değildir. AI sekmesindeki onay seçeneklerini ve **Analizi Başlat** butonunu kullanmadan işlem verisi veya ekran görüntüsü gönderilmez.

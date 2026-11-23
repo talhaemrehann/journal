@@ -137,8 +137,9 @@ function App() {
   const [hidePnl, setHidePnl] = useState(false)
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false)
   const [aiApiKey, setAiApiKey] = useState('')
-  const [aiBaseUrl, setAiBaseUrl] = useState('https://api.openai.com/v1')
-  const [aiModel, setAiModel] = useState('gpt-4o-mini')
+  const [aiProvider, setAiProvider] = useState<'gemini' | 'openai'>('gemini')
+  const [aiBaseUrl, setAiBaseUrl] = useState('https://generativelanguage.googleapis.com/v1beta/openai')
+  const [aiModel, setAiModel] = useState('gemini-3.8-flash')
   const [includeNotes, setIncludeNotes] = useState(true)
   const [includeScreenshots, setIncludeScreenshots] = useState(true)
   const [aiStatus, setAiStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle')
@@ -316,7 +317,7 @@ function App() {
         ? trades.flatMap((trade) => getTradeScreenshots(trade)).slice(0, 8)
         : []
       const result = await requestOpenAiCompatibleCoaching(
-        { baseUrl: aiBaseUrl, apiKey: aiApiKey, model: aiModel },
+        { provider: aiProvider, baseUrl: aiBaseUrl, apiKey: aiApiKey, model: aiModel },
         prompt,
         screenshots,
       )
@@ -345,7 +346,7 @@ function App() {
         JSON.stringify(buildJournalSnapshot([trade], includeNotes).trades[0]),
       ].join('\n')
       const result = await requestOpenAiCompatibleCoaching(
-        { baseUrl: aiBaseUrl, apiKey: aiApiKey, model: aiModel },
+        { provider: aiProvider, baseUrl: aiBaseUrl, apiKey: aiApiKey, model: aiModel },
         prompt,
         includeScreenshots ? getTradeScreenshots(trade).slice(0, 8) : [],
       )
@@ -656,12 +657,25 @@ function App() {
       {aiSettingsOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && setAiSettingsOpen(false)}>
           <div className="modal ai-settings-modal" role="dialog" aria-modal="true" aria-labelledby="ai-settings-title">
-            <div className="modal-header"><div><p className="eyebrow">OpenAI uyumlu sağlayıcı</p><h2 id="ai-settings-title">AI Sağlayıcı Ayarları</h2></div><button className="icon-button" type="button" aria-label="Ayarları kapat" onClick={() => setAiSettingsOpen(false)}><Icon name="close" /></button></div>
+            <div className="modal-header"><div><p className="eyebrow">Gemini veya OpenAI uyumlu sağlayıcı</p><h2 id="ai-settings-title">AI Sağlayıcı Ayarları</h2></div><button className="icon-button" type="button" aria-label="Ayarları kapat" onClick={() => setAiSettingsOpen(false)}><Icon name="close" /></button></div>
             <div className="ai-settings-form">
-              <label>API Base URL<input type="url" value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" /></label>
-              <label>API Key<input type="password" value={aiApiKey} onChange={(event) => setAiApiKey(event.target.value)} placeholder="sk-..." autoComplete="off" /></label>
-              <label>Vision model<input type="text" value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder="gpt-4o-mini" /></label>
-              <div className="ai-key-warning"><strong>Tarayıcıdan doğrudan API kullanımı üretim için önerilmez.</strong><p>Anahtar React oturumu içinde tutulur; localStorage’a veya kaynak dosyasına kaydedilmez. Sayfayı yenilemek anahtarı siler. Üretimde bir backend proxy kullanın.</p></div>
+              <div className="provider-choice">
+                <button type="button" className={aiProvider === 'gemini' ? 'active' : ''} onClick={() => { setAiProvider('gemini'); setAiBaseUrl('https://generativelanguage.googleapis.com/v1beta/openai'); setAiModel('gemini-3.8-flash') }}>
+                  <strong>Gemini</strong><small>Önerilen · AI Studio</small>
+                </button>
+                <button type="button" className={aiProvider === 'openai' ? 'active' : ''} onClick={() => { setAiProvider('openai'); setAiBaseUrl('https://api.openai.com/v1'); setAiModel('gpt-4o-mini') }}>
+                  <strong>OpenAI uyumlu</strong><small>Kişisel/özel endpoint</small>
+                </button>
+              </div>
+              <label>API Base URL<input type="url" value={aiBaseUrl} onChange={(event) => setAiBaseUrl(event.target.value)} placeholder={aiProvider === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta/openai' : 'https://api.openai.com/v1'} /></label>
+              <label>{aiProvider === 'gemini' ? 'Gemini API Key' : 'API Key'}<input type="password" value={aiApiKey} onChange={(event) => setAiApiKey(event.target.value)} placeholder={aiProvider === 'gemini' ? 'AI Studio API anahtarı' : 'sk-...'} autoComplete="off" /></label>
+              <label>Vision model<input type="text" value={aiModel} onChange={(event) => setAiModel(event.target.value)} placeholder={aiProvider === 'gemini' ? 'gemini-3.8-flash' : 'gpt-4o-mini'} /></label>
+              <div className="ai-key-warning">
+                <strong>{aiProvider === 'gemini' ? 'Gemini AI Studio: ücretsiz/uygun seviye anahtarınızı kullanın.' : 'Tarayıcıdan doğrudan API kullanımı üretim için önerilmez.'}</strong>
+                <p>{aiProvider === 'gemini'
+                  ? 'Base URL: https://generativelanguage.googleapis.com/v1beta/openai · Model: gemini-3.8-flash. Anahtar AI Studio’dan alınır ve React oturum belleğinde tutulur.'
+                  : 'Anahtar React oturumu içinde tutulur; localStorage’a veya kaynak dosyasına kaydedilmez.'} Sayfayı yenilemek anahtarı siler. Üretimde backend proxy kullanın.</p>
+              </div>
             </div>
             <div className="modal-actions"><button className="primary-button" type="button" onClick={() => setAiSettingsOpen(false)}>Ayarları Kaydet</button></div>
           </div>
